@@ -1,159 +1,228 @@
 import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import '../models/player.dart';
+import '../models/game_models.dart';
+import '../services/persistence_service.dart';
 
 class GameController extends ChangeNotifier {
-  final List<Player> _players = [];
+  final List<Player> _registeredPlayers = []; 
+  List<Player> _playersInQueue = []; 
+  Match? _currentMatch; 
+  GameConfiguration _config = GameConfiguration.defaultConfig();
+  final PersistenceService _persistence = PersistenceService();
 
-  // Getters para a UI saber quem é quem
-  List<Player> get waitingPlayers =>
-      _players.where((p) => p.status == PlayerStatus.waiting).toList();
+  GameController() {
+    _init();
+  }
 
-  List<Player> get currentMatchPlayers =>
-      _players.where((p) => p.status == PlayerStatus.playing).toList();
+  // Inicializar carregando dados salvos
+  Future<void> _init() async {
+    final savedPlayers = await _persistence.loadPlayers();
+    _registeredPlayers.addAll(savedPlayers);
+    // Inicialmente, todos os jogadores carregados vão para a fila se não houver partida ativa
+    _playersInQueue = List.from(_registeredPlayers);
+    notifyListeners();
+  }
 
-  // --- O ALGORITMO (A Mágica) ---
+  List<Player> get registeredPlayers => _registeredPlayers;
+  List<Player> get playersInQueue => _playersInQueue;
+  Match? get currentMatch => _currentMatch;
+  GameConfiguration get config => _config;
 
-  // Sorteia um único jogador da lista baseado no peso (tempo de espera)
+  List<Player> get playersOnCourt {
+    if (_currentMatch == null) return [];
+    return [..._currentMatch!.teamA.players, ..._currentMatch!.teamB.players];
+  }
+
+  // Métodos de Persistência
+  void _save() {
+    _persistence.savePlayers(_registeredPlayers);
+  }
+
+  void addPlayer(String name, PlayerGender gender, List<PlayerPosition> positions) {
+    final newPlayer = Player(
+      name: name,
+      gender: gender,
+      positions: positions,
+      status: PlayerStatus.waiting,
+      arrivalTime: DateTime.now(),
+    );
+    _registeredPlayers.add(newPlayer);
+    _playersInQueue.add(newPlayer);
+    _save();
+    notifyListeners();
+  }
+
+  void clearAllPlayers() {
+    _registeredPlayers.clear();
+    _playersInQueue.clear();
+    _currentMatch = null;
+    _save();
+    notifyListeners();
+  }
+
+  // Import/Export
+  String exportData() {
+    return _persistence.exportToJson(_registeredPlayers);
+  }
+
+  void importData(String jsonString) {
+    try {
+      final imported = _persistence.importFromJson(jsonString);
+      _registeredPlayers.clear();
+      _registeredPlayers.addAll(imported);
+      _playersInQueue = List.from(_registeredPlayers);
+      _save();
+      notifyListeners();
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // --- ALGORITMO HÍBRIDO DE SORTEIO ---
+
   Player? _weightedDraw(List<Player> pool) {
     if (pool.isEmpty) return null;
-
-    // 1. Soma total de bilhetes (minutos de espera)
-    int totalTickets = pool.fold(0, (sum, player) => sum + player.ticketWeight);
-
-    // Se ninguém tem tempo acumulado (acabaram de chegar), sorteia aleatório simples
-    if (totalTickets == 0) {
-      return pool[Random().nextInt(pool.length)];
-    }
-
-    // 2. Escolhe o bilhete premiado
+    int totalTickets = pool.fold(0, (sum, player) => sum + player.tickets);
+    if (totalTickets == 0) return pool[Random().nextInt(pool.length)];
     int winningTicket = Random().nextInt(totalTickets);
-
-    // 3. Encontra o dono do bilhete
     int currentSum = 0;
     for (var player in pool) {
-      currentSum += player.ticketWeight;
-      if (winningTicket < currentSum) {
-        return player;
-      }
+      currentSum += player.tickets;
+      if (winningTicket < currentSum) return player;
     }
-    // Caso de segurança (não deve acontecer)
     return pool.last;
   }
 
-  // Função Principal: GERAR TIMES
-  // Retorna uma String de erro se algo der errado, ou null se der certo.
-  String? startGame({bool forceFemale = false, bool forceSetter = false}) {
-    // Regra Básica: Precisa de pelo menos 8 pessoas na fila (ou fila + quem estava jogando se quiser rodar direto, mas vamos focar na fila)
-    if (waitingPlayers.length < 8) {
-      return "Precisamos de pelo menos 8 jogadores na fila!";
+  List<Player> _sortearDesafiante(List<Player> disponiveis, GameConfiguration config) {
+    List<Player> selecionados = [];
+    List<Player> pool = List.from(disponiveis.where((j) => j.restCounter == 0));
+
+    if (pool.isNotEmpty) {
+      Player maisAntigo = pool.reduce((a, b) => a.arrivalTime.isBefore(b.arrivalTime) ? a : b);
+      selecionados.add(maisAntigo);
+      pool.remove(maisAntigo);
     }
 
-    // 1. Quem estava jogando vai para o DESCANSO (Fim da fila)
-    // Eles saem do status 'playing' e voltam para 'waiting' com o horário de AGORA (zerando o peso)
-    for (var p in currentMatchPlayers) {
-      p.status = PlayerStatus.waiting;
-      p.arrivalTime = DateTime.now(); // Zera o tempo de espera
-    }
-
-    List<Player> selectedPlayers = [];
-
-    // Cria uma cópia da fila para podermos remover quem for sendo sorteado sem quebrar a lista original
-    List<Player> pool = List.from(waitingPlayers);
-
-    // --- FILTROS OBRIGATÓRIOS ---
-
-    // Filtro 1: Vaga Feminina Obrigatória (pelo menos 1 por time = 2 total)
-    if (forceFemale) {
-      var females = pool.where((p) => p.gender == PlayerGender.female).toList();
-      // Precisamos de 2 mulheres. Sorteamos 2 usando o peso entre elas.
-      for (int i = 0; i < 2; i++) {
-        if (females.isNotEmpty) {
-          Player? chosen = _weightedDraw(females);
-          if (chosen != null) {
-            selectedPlayers.add(chosen);
-            pool.remove(chosen); // Tira da urna geral
-            females.remove(chosen); // Tira da urna feminina
-          }
+    if (config.requireFemale) {
+      List<Player> mulheres = pool.where((j) => j.gender == PlayerGender.female).toList();
+      if (mulheres.isNotEmpty) {
+        Player? mulher = _weightedDraw(mulheres);
+        if (mulher != null) {
+          selecionados.add(mulher);
+          pool.remove(mulher);
         }
       }
     }
 
-    // Filtro 2: Levantador Obrigatório (pelo menos 1 por time = 2 total)
-    if (forceSetter) {
-      // Procura quem é Setter OU AllRounder
-      var setters = pool.where((p) =>
-      p.positions.contains(PlayerPosition.setter) ||
-          p.positions.contains(PlayerPosition.allRounder)
-      ).toList();
-
-      // Precisamos preencher até ter 2 levantadores no total (contando com quem já foi sorteado antes, ex: uma menina levantadora)
-      int currentSetters = selectedPlayers.where((p) =>
-      p.positions.contains(PlayerPosition.setter) ||
-          p.positions.contains(PlayerPosition.allRounder)
-      ).length;
-
-      int needed = 2 - currentSetters;
-
-      for (int i = 0; i < needed; i++) {
-        if (setters.isNotEmpty) {
-          Player? chosen = _weightedDraw(setters);
-          if (chosen != null) {
-            selectedPlayers.add(chosen);
-            pool.remove(chosen);
-            setters.remove(chosen);
-          }
+    if (config.requireSetter) {
+      List<Player> levantadores = pool.where((j) => j.positions.contains(PlayerPosition.setter)).toList();
+      if (levantadores.isNotEmpty) {
+        Player? levantador = _weightedDraw(levantadores);
+        if (levantador != null) {
+          selecionados.add(levantador);
+          pool.remove(levantador);
         }
       }
     }
 
-    // --- PREENCHIMENTO FINAL ---
-    // Preenche as vagas restantes até dar 8 jogadores
-    while (selectedPlayers.length < 8) {
-      if (pool.isEmpty) break; // Não deve acontecer devido à checagem inicial
-
-      Player? chosen = _weightedDraw(pool);
-      if (chosen != null) {
-        selectedPlayers.add(chosen);
-        pool.remove(chosen);
+    int vagasRestantes = 4 - selecionados.length;
+    for (int i = 0; i < vagasRestantes; i++) {
+      if (pool.isEmpty) break;
+      Player? sorteado = _weightedDraw(pool);
+      if (sorteado != null) {
+        selecionados.add(sorteado);
+        pool.remove(sorteado);
       }
     }
-
-    // --- ATUALIZAÇÃO DE STATUS ---
-    // Marca os 8 escolhidos como 'playing'
-    for (var p in selectedPlayers) {
-      // Precisamos achar o objeto original na lista principal e atualizar
-      int index = _players.indexOf(p);
-      if (index != -1) {
-        _players[index].status = PlayerStatus.playing;
-      }
-    }
-
-    notifyListeners(); // Atualiza a tela!
-    return null; // Sucesso
+    return selecionados;
   }
 
-  // Função para FINALIZAR PARTIDA manualmente (opcional, pois o "Gerar Times" já faz o ciclo)
-  void finishMatch() {
-    for (var p in currentMatchPlayers) {
-      p.status = PlayerStatus.waiting;
-      p.arrivalTime = DateTime.now();
-    }
-    notifyListeners();
-  }
+  String? startInitialMatch() {
+    List<Player> availablePlayers = _playersInQueue.where((p) => p.status == PlayerStatus.waiting).toList();
+    if (availablePlayers.length < 8) return "Mínimo de 8 jogadores na fila!";
 
-  // Cadastro (mantido igual)
-  void addPlayer(String name, PlayerGender gender, List<PlayerPosition> pos) {
-    final positions = pos.isEmpty ? [PlayerPosition.allRounder] : pos;
-    _players.add(
-      Player(
-        name: name,
-        gender: gender,
-        positions: positions,
-        status: PlayerStatus.waiting,
-        arrivalTime: DateTime.now(),
-      ),
+    List<Player> teamAPlayers = _sortearDesafiante(availablePlayers, _config);
+    availablePlayers.removeWhere((p) => teamAPlayers.contains(p));
+    List<Player> teamBPlayers = _sortearDesafiante(availablePlayers, _config);
+    availablePlayers.removeWhere((p) => teamBPlayers.contains(p));
+
+    for (var p in teamAPlayers) { p.status = PlayerStatus.playingWinner; p.tickets = 0; _playersInQueue.remove(p); }
+    for (var p in teamBPlayers) { p.status = PlayerStatus.playingChallenger; p.tickets = 0; _playersInQueue.remove(p); }
+
+    _currentMatch = Match(
+      id: const Uuid().v4(),
+      teamA: Team(id: const Uuid().v4(), type: TeamType.teamA, players: teamAPlayers),
+      teamB: Team(id: const Uuid().v4(), type: TeamType.teamB, players: teamBPlayers),
+      timestamp: DateTime.now()
     );
+
+    for (var p in _playersInQueue) { p.tickets++; }
+    _save();
     notifyListeners();
+    return null;
+  }
+
+  String? finishMatchAndDrawChallenger(Team winnerTeam) {
+    if (_currentMatch == null) return "Sem partida ativa.";
+    Team loserTeam = (winnerTeam.id == _currentMatch!.teamA.id) ? _currentMatch!.teamB : _currentMatch!.teamA;
+
+    for (Player j in winnerTeam.players) {
+      j.status = PlayerStatus.playingWinner;
+      j.wins++;
+      j.matchesPlayed++;
+      j.tickets = 0;
+    }
+    winnerTeam.consecutiveWins++;
+
+    for (Player j in loserTeam.players) {
+      j.status = PlayerStatus.resting;
+      j.restCounter = _config.restMatches;
+      j.tickets++;
+      j.losses++;
+      j.matchesPlayed++;
+    }
+
+    for (Player j in _playersInQueue) { j.tickets++; }
+
+    for (Player j in _registeredPlayers.where((p) => p.status == PlayerStatus.resting)) {
+      j.restCounter = max(0, j.restCounter - 1);
+      if (j.restCounter == 0) {
+        j.status = PlayerStatus.waiting;
+        if (!_playersInQueue.contains(j)) _playersInQueue.add(j);
+      }
+    }
+
+    if (_config.winLimit != null && winnerTeam.consecutiveWins >= _config.winLimit!) {
+      for (Player p in playersOnCourt) {
+        p.status = PlayerStatus.waiting;
+        p.tickets = 0;
+        if (!_playersInQueue.contains(p)) _playersInQueue.add(p);
+      }
+      _currentMatch = null;
+      _save();
+      notifyListeners();
+      return "Limite de vitórias atingido!";
+    }
+
+    List<Player> challengerPlayers = _sortearDesafiante(_playersInQueue, _config);
+    for (var p in challengerPlayers) {
+      p.status = PlayerStatus.playingChallenger;
+      p.tickets = 0;
+      _playersInQueue.remove(p);
+    }
+
+    _currentMatch = Match(
+      id: const Uuid().v4(),
+      teamA: winnerTeam,
+      teamB: Team(id: const Uuid().v4(), type: loserTeam.type, players: challengerPlayers),
+      timestamp: DateTime.now()
+    );
+
+    _save();
+    notifyListeners();
+    return null;
   }
 }
