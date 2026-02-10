@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 import '../models/game_models.dart';
 
 class SliderVencedor extends StatefulWidget {
+  final Function(Team) onTeamSelected;
   final Team teamA;
   final Team teamB;
-  final Function(Team vencedor) onVencedorSelecionado;
 
   const SliderVencedor({
     super.key,
+    required this.onTeamSelected,
     required this.teamA,
     required this.teamB,
-    required this.onVencedorSelecionado,
   });
 
   @override
@@ -18,63 +18,120 @@ class SliderVencedor extends StatefulWidget {
 }
 
 class _SliderVencedorState extends State<SliderVencedor> {
-  double _value = 0.5; 
+  double _sliderValue = 0.5;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: 60,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(30),
-        gradient: LinearGradient(
-          colors: [
-            const Color(0xFF4A90A4).withOpacity(_value < 0.3 ? 1.0 : 0.6),
-            const Color(0xFFD32F2F).withOpacity(_value > 0.7 ? 1.0 : 0.6),
-          ],
-          stops: const [0.0, 1.0],
-        ),
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Padding(
-                padding: EdgeInsets.only(left: 20),
-                child: Text("<<< VENCEDOR", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-              Padding(
-                padding: EdgeInsets.only(right: 20),
-                child: Text("VENCEDOR >>>", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ],
+    return Column(
+      children: [
+        // Slider
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [Colors.blue[400]!, Colors.red[400]!],
+            ),
           ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 60,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 25),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 0),
-              activeTrackColor: Colors.transparent,
-              inactiveTrackColor: Colors.transparent,
-              thumbColor: Colors.white,
+          child: SliderTheme(
+            data: SliderThemeData(
+              trackHeight: 12,
+              thumbShape: RoundSliderThumbShape(
+                enabledThumbRadius: 20,
+                elevation: 4,
+              ),
+              overlayShape: RoundSliderOverlayShape(overlayRadius: 24),
             ),
             child: Slider(
-              value: _value,
-              onChanged: (val) => setState(() => _value = val),
-              onChangeEnd: (val) {
-                if (val <= 0.1) {
-                  widget.onVencedorSelecionado(widget.teamA);
-                } else if (val >= 0.9) {
-                  widget.onVencedorSelecionado(widget.teamB);
+              value: _sliderValue,
+              onChanged: (value) {
+                setState(() {
+                  _sliderValue = value;
+                });
+              },
+              onChangeEnd: (value) {
+                if (value < 0.5) {
+                  widget.onTeamSelected(widget.teamA);
+                } else {
+                  widget.onTeamSelected(widget.teamB);
                 }
-                setState(() => _value = 0.5);
+                // Reset slider
+                setState(() {
+                  _sliderValue = 0.5;
+                });
               },
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 16),
+        // Labels
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.blue[400],
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'A',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'TIME A',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+            Column(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.red[400],
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'B',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'TIME B',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
