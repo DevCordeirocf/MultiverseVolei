@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import 'dart:math';
 
 enum PlayerStatus { 
   playingWinner,    // Jogando_Vencedor
@@ -37,6 +38,9 @@ class Player {
   int wins;
   int losses;
   int matchesPlayed;
+
+  // Getter para peso dos bilhetes
+  int get ticketWeight => tickets;
 
   Player({
     String? id,

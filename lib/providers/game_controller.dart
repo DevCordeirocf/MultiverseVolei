@@ -36,6 +36,15 @@ class GameController extends ChangeNotifier {
     return [..._currentMatch!.teamA.players, ..._currentMatch!.teamB.players];
   }
 
+  List<Player> get currentMatchPlayers {
+    if (_currentMatch == null) return [];
+    return [..._currentMatch!.teamA.players, ..._currentMatch!.teamB.players];
+  }
+
+  List<Player> get waitingPlayers {
+    return _playersInQueue.where((p) => p.status == PlayerStatus.waiting).toList();
+  }
+
   // Métodos de Persistência
   void _save() {
     _persistence.savePlayers(_registeredPlayers);
@@ -59,6 +68,22 @@ class GameController extends ChangeNotifier {
     _registeredPlayers.clear();
     _playersInQueue.clear();
     _currentMatch = null;
+    _save();
+    notifyListeners();
+  }
+
+  void startGame() {
+    startInitialMatch();
+  }
+
+  void finishMatch() {
+    _currentMatch = null;
+    for (var p in _registeredPlayers) {
+      p.status = PlayerStatus.waiting;
+      p.restCounter = 0;
+      p.tickets = 0;
+    }
+    _playersInQueue = List.from(_registeredPlayers);
     _save();
     notifyListeners();
   }
